@@ -38,6 +38,7 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/devices/accel"
 	"gvisor.dev/gvisor/pkg/sentry/devices/memdev"
 	"gvisor.dev/gvisor/pkg/sentry/devices/nvproxy"
+	"gvisor.dev/gvisor/pkg/sentry/devices/tpuproxy"
 	"gvisor.dev/gvisor/pkg/sentry/devices/ttydev"
 	"gvisor.dev/gvisor/pkg/sentry/devices/tundev"
 	"gvisor.dev/gvisor/pkg/sentry/fsimpl/cgroupfs"
@@ -1190,37 +1191,57 @@ func createDeviceFile(ctx context.Context, creds *auth.Credentials, info *contai
 	return dev.CreateDeviceFile(ctx, vfsObj, creds, root, devSpec.Path, major, minor, mode, devSpec.UID, devSpec.GID)
 }
 
+// registerTPUDevice registers a TPU device in vfsObj based on the given device ID.
+func registerTPUDevice(vfsObj *vfs.VirtualFilesystem, minor uint32, deviceID int64) error {
+	switch deviceID {
+	case tpu.TPUV4DeviceID, tpu.TPUV4liteDeviceID:
+		return accel.RegisterTPUDevice(vfsObj, minor, deviceID == tpu.TPUV4liteDeviceID)
+	case tpu.TPUV5eDeviceID:
+		return tpuproxy.RegisterTPUDevice(vfsObj, minor)
+	default:
+		return fmt.Errorf("unsupported TPU device with ID: 0x%x", deviceID)
+	}
+}
+
 func tpuProxyRegisterDevices(info *containerInfo, vfsObj *vfs.VirtualFilesystem) error {
 	if !specutils.TPUProxyIsEnabled(info.spec, info.conf) {
 		return nil
 	}
-	// At this point /sys/devices/pci0000:00/<pci_address>/accel/accel# contains
-	// all the TPU devices on the host. Enumerate them and register TPU devices.
-	pciAddrs, err := filepath.Glob("/sys/devices/pci0000:00/*/accel/accel*")
-	if err != nil {
-		return fmt.Errorf("enumerating PCI device files: %w", err)
+	// TPU v4 devices are accessible via /sys/devices/pci0000:00/<pci_address>/accel/accel# on the host.
+	// TPU v5 devices are accessible via at /sys/devices/pci0000:00/<pci_address>/vfio-dev/vfio# on the host.
+	pathGlobToPathRegex := map[string]string{
+		"/sys/devices/pci0000:00/*/accel/accel*":   `^/sys/devices/pci0000:00/\d+:\d+:\d+\.\d+/accel/accel(\d+)$`,
+		"/sys/devices/pci0000:00/*/vfio-dev/vfio*": `^/sys/devices/pci0000:00/\d+:\d+:\d+\.\d+/vfio-dev/vfio(\d+)$`,
 	}
-	pciPathRegex := regexp.MustCompile(`^/sys/devices/pci0000:00/\d+:\d+:\d+\.\d+/accel/accel(\d+)$`)
-	for _, pciPath := range pciAddrs {
-		ms := pciPathRegex.FindStringSubmatch(pciPath)
-		if ms == nil {
-			continue
-		}
-		deviceNum, err := strconv.ParseUint(ms[1], 10, 32)
+
+	// Enumerate all potential PCI paths where TPU devices are available and register the found TPU devices.
+	for pciPathGlobal, pathRegex := range pathGlobToPathRegex {
+		pciAddrs, err := filepath.Glob(pciPathGlobal)
 		if err != nil {
-			return fmt.Errorf("parsing PCI device number: %w", err)
+			return fmt.Errorf("enumerating PCI device files: %w", err)
 		}
-		var deviceIDBytes []byte
-		if deviceIDBytes, err = os.ReadFile(path.Join(pciPath, "device/device")); err != nil {
-			return fmt.Errorf("reading PCI device ID: %w", err)
-		}
-		deviceIDStr := strings.Replace(string(deviceIDBytes), "0x", "", -1)
-		deviceID, err := strconv.ParseInt(strings.TrimSpace(deviceIDStr), 16, 64)
-		if err != nil {
-			return fmt.Errorf("parsing PCI device ID: %w", err)
-		}
-		if err := accel.RegisterTPUV4Device(vfsObj, uint32(deviceNum), deviceID == tpu.TPUV4liteDeviceID); err != nil {
-			return fmt.Errorf("registering accel driver: %w", err)
+		pciPathRegex := regexp.MustCompile(pathRegex)
+		for _, pciPath := range pciAddrs {
+			ms := pciPathRegex.FindStringSubmatch(pciPath)
+			if ms == nil {
+				continue
+			}
+			deviceNum, err := strconv.ParseUint(ms[1], 10, 32)
+			if err != nil {
+				return fmt.Errorf("parsing PCI device number: %w", err)
+			}
+			var deviceIDBytes []byte
+			if deviceIDBytes, err = os.ReadFile(path.Join(pciPath, "device/device")); err != nil {
+				return fmt.Errorf("reading PCI device ID: %w", err)
+			}
+			deviceIDStr := strings.Replace(string(deviceIDBytes), "0x", "", -1)
+			deviceID, err := strconv.ParseInt(strings.TrimSpace(deviceIDStr), 16, 64)
+			if err != nil {
+				return fmt.Errorf("parsing PCI device ID: %w", err)
+			}
+			if err := registerTPUDevice(vfsObj, uint32(deviceNum), deviceID); err != nil {
+				return fmt.Errorf("registering TPU driver: %w", err)
+			}
 		}
 	}
 	return nil
