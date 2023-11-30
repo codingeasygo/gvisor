@@ -27,14 +27,18 @@ import (
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 )
 
-const pciMainBusDevicePath = "/sys/devices/pci0000:00"
+const (
+	pciMainBusDevicePath = "/sys/devices/pci0000:00"
+	accelDevice          = "accel"
+	vfioDevice           = "vfio-dev"
+)
 
 var (
 	// Matches PCI device addresses in the main domain.
 	pciDeviceRegex = regex.MustCompile(`0000:([a-fA-F0-9]{2}|[a-fA-F0-9]{4}):[a-fA-F0-9]{2}\.[a-fA-F0-9]{1,2}`)
-	// Matches the directories for the main bus (i.e. pci000:00), accel, and
-	// individual devices (e.g. 00:00:04.0)
-	sysDevicesDirRegex = regex.MustCompile(`pci0000:00|accel|(0000:([a-fA-F0-9]{2}|[a-fA-F0-9]{4}):[a-fA-F0-9]{2}\.[a-fA-F0-9]{1,2})`)
+	// Matches the directories for the main bus (i.e. pci000:00),
+	// individual devices (e.g. 00:00:04.0), accel (TPU v4), and vfio (TPU v5)
+	sysDevicesDirRegex = regex.MustCompile(`pci0000:00|accel|vfio|(0000:([a-fA-F0-9]{2}|[a-fA-F0-9]{4}):[a-fA-F0-9]{2}\.[a-fA-F0-9]{1,2})`)
 	// Files allowlisted for host passthrough. These files are read-only.
 	sysDevicesFiles = map[string]any{
 		"vendor": nil, "device": nil, "subsystem_vendor": nil, "subsystem_device": nil,
@@ -48,25 +52,26 @@ var (
 	}
 )
 
-// Create /sys/class/accel/accel# symlinks.
-func (fs *filesystem) newAccelDir(ctx context.Context, creds *auth.Credentials) (map[string]kernfs.Inode, error) {
-	accelDirs := map[string]kernfs.Inode{}
+// Creates TPU devices' symlinks under /sys/class/.
+// TPU v4 symlinks are created at /sys/class/accel/accel#.
+// TPU v5 symlinks go to /sys/class/vfio-dev/vfio#.
+func (fs *filesystem) newDeviceClassDir(ctx context.Context, creds *auth.Credentials, tpuDeviceType string) (map[string]kernfs.Inode, error) {
+	dirs := map[string]kernfs.Inode{}
 	pciDents, err := hostDirEntries(pciMainBusDevicePath)
 	if err != nil {
 		return nil, err
 	}
 	for _, pciDent := range pciDents {
-		accelDents, err := hostDirEntries(path.Join(pciMainBusDevicePath, pciDent, "accel"))
+		deviceDents, err := hostDirEntries(path.Join(pciMainBusDevicePath, pciDent, tpuDeviceType))
 		if err != nil {
 			return nil, err
 		}
-		if len(accelDents) != 1 {
-			return nil, fmt.Errorf("path %q should only have one entry", path.Join(pciMainBusDevicePath, pciDent, "accel"))
+		if numOfDeviceDents := len(deviceDents); numOfDeviceDents != 1 {
+			return nil, fmt.Errorf("exactly one entry is expected at path %v while there are %d", path.Join(pciMainBusDevicePath, pciDent, tpuDeviceType), numOfDeviceDents)
 		}
-		accelDirs[accelDents[0]] = kernfs.NewStaticSymlink(ctx, creds, linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), fmt.Sprintf("../../devices/pci0000:00/%s/accel/%s", pciDent, accelDents[0]))
+		dirs[deviceDents[0]] = kernfs.NewStaticSymlink(ctx, creds, linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), fmt.Sprintf("../../devices/pci0000:00/%s/%s/%s", pciDent, tpuDeviceType, deviceDents[0]))
 	}
-
-	return accelDirs, nil
+	return dirs, nil
 }
 
 // Create /sys/bus/pci/devices symlinks.

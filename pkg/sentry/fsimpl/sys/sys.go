@@ -17,6 +17,7 @@ package sys
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -55,7 +56,7 @@ type InternalData struct {
 	ProductName string
 	// EnableAccelSysfs is whether to populate sysfs paths used by hardware
 	// accelerators.
-	EnableAccelSysfs bool
+	EnableTPUProxySysfs bool
 }
 
 // filesystem implements vfs.FilesystemImpl.
@@ -126,18 +127,32 @@ func (fsType FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.Virt
 	if opts.InternalData != nil {
 		idata := opts.InternalData.(*InternalData)
 		productName = idata.ProductName
-		if idata.EnableAccelSysfs {
+		if idata.EnableTPUProxySysfs {
 			pciMainBusSub, err := fs.mirrorPCIBusDeviceDir(ctx, creds, pciMainBusDevicePath)
 			if err != nil {
 				return nil, nil, err
 			}
 			devicesSub["pci0000:00"] = fs.newDir(ctx, creds, defaultSysDirMode, pciMainBusSub)
 
-			accelSub, err := fs.newAccelDir(ctx, creds)
-			if err != nil {
-				return nil, nil, err
+			deviceLookupErr := errors.New("no registered TPU device is found")
+			// Creates TPU specific /sys/class subdirectores.
+			for _, tpuDeviceType := range []string{accelDevice, vfioDevice} {
+				deviceDir, err := fs.newDeviceClassDir(ctx, creds, tpuDeviceType)
+				// gVisor looks for all available TPU in order.
+				// When a certian TPU type is not registered, its /sys/class path on the host is absent,
+				// gVisor is expected to keep searching as long as a TPU device is available.
+				if err != nil && deviceLookupErr != nil {
+					deviceLookupErr = errors.Join(deviceLookupErr, err)
+				} else {
+					deviceLookupErr = nil
+				}
+				if len(deviceDir) > 0 {
+					classSub[tpuDeviceType] = fs.newDir(ctx, creds, defaultSysDirMode, deviceDir)
+				}
 			}
-			classSub["accel"] = fs.newDir(ctx, creds, defaultSysDirMode, accelSub)
+			if deviceLookupErr != nil {
+				return nil, nil, deviceLookupErr
+			}
 
 			pciDevicesSub, err := fs.newPCIDevicesDir(ctx, creds)
 			if err != nil {
