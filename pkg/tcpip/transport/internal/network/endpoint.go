@@ -229,6 +229,9 @@ type WriteContext struct {
 	route *stack.Route
 	ttl   uint8
 	tos   uint8
+
+	//local addr to overwrite endpoint
+	localAddr *tcpip.Address
 }
 
 func (c *WriteContext) MTU() uint32 {
@@ -251,9 +254,13 @@ type WritePacketInfo struct {
 
 // PacketInfo returns the properties of a packet that will be written.
 func (c *WriteContext) PacketInfo() WritePacketInfo {
+	localAddr := c.route.LocalAddress()
+	if c.localAddr != nil {
+		localAddr = *c.localAddr
+	}
 	return WritePacketInfo{
 		NetProto:                    c.route.NetProto(),
-		LocalAddress:                c.route.LocalAddress(),
+		LocalAddress:                localAddr,
 		RemoteAddress:               c.route.RemoteAddress(),
 		MaxHeaderLength:             c.route.MaxHeaderLength(),
 		RequiresTXTransportChecksum: c.route.RequiresTXTransportChecksum(),
@@ -321,6 +328,9 @@ func (c *WriteContext) WritePacket(pkt stack.PacketBufferPtr, headerIncluded boo
 		Protocol: c.e.transProto,
 		TTL:      c.ttl,
 		TOS:      c.tos,
+
+		//overwrite
+		LocalAddress: c.localAddr,
 	}, pkt)
 
 	if _, ok := err.(*tcpip.ErrNoBufferSpace); ok {
@@ -526,11 +536,19 @@ func (e *Endpoint) AcquireContextForWrite(opts tcpip.WriteOptions) (WriteContext
 		panic(fmt.Sprintf("invalid protocol number = %d", netProto))
 	}
 
+	var localAddr *tcpip.Address
+	if opts.From != nil {
+		localAddr = &opts.From.Addr
+	}
+
 	return WriteContext{
 		e:     e,
 		route: route,
 		ttl:   ttl,
 		tos:   tos,
+
+		//overwrite
+		localAddr: localAddr,
 	}, nil
 }
 

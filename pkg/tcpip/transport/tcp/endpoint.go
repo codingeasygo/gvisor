@@ -2777,6 +2777,8 @@ func (e *endpoint) bindLocked(addr tcpip.FullAddress) (err tcpip.Error) {
 		return err
 	}
 
+	port = 0
+
 	e.boundBindToDevice = bindToDevice
 	e.boundPortFlags = e.portFlags
 	// TODO(gvisor.dev/issue/3691): Add test to verify boundNICID is correct.

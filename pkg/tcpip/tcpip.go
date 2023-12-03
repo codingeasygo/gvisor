@@ -704,6 +704,9 @@ type ReadResult struct {
 	// ControlMessages is the control messages received.
 	ControlMessages ReceivableControlMessages
 
+	// LocalAddr is the locald address if ReadOptions.NeedAddr is true.
+	LocalAddr FullAddress
+
 	// RemoteAddr is the remote address if ReadOptions.NeedAddr is true.
 	RemoteAddr FullAddress
 
@@ -885,7 +888,8 @@ type EndpointStats interface {
 type WriteOptions struct {
 	// If To is not nil, write to the given address instead of the endpoint's
 	// peer.
-	To *FullAddress
+	From *FullAddress
+	To   *FullAddress
 
 	// More has the same semantics as Linux's MSG_MORE.
 	More bool

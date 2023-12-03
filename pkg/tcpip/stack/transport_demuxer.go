@@ -106,6 +106,14 @@ func (eps *transportEndpoints) iterEndpointsLocked(id TransportEndpointID, yield
 			return
 		}
 	}
+
+	// Try to find a match with all.
+	nid.LocalPort = 0
+	if ep, ok := eps.endpoints[nid]; ok {
+		if !yield(ep) {
+			return
+		}
+	}
 }
 
 // findAllEndpointsLocked returns all endpointsByNIC in eps that match id, in

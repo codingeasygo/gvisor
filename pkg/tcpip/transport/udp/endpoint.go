@@ -296,6 +296,7 @@ func (e *endpoint) Read(dst io.Writer, opts tcpip.ReadOptions) (tcpip.ReadResult
 		ControlMessages: cm,
 	}
 	if opts.NeedRemoteAddr {
+		res.LocalAddr = p.destinationAddress
 		res.RemoteAddr = p.senderAddress
 	}
 
@@ -443,10 +444,15 @@ func (e *endpoint) prepareForWrite(p tcpip.Payloader, opts tcpip.WriteOptions) (
 		return udpPacketInfo{}, &tcpip.ErrBadBuffer{}
 	}
 
+	localPort := e.localPort
+	if opts.From != nil {
+		localPort = opts.From.Port
+	}
+
 	return udpPacketInfo{
 		ctx:        ctx,
 		data:       buf,
-		localPort:  e.localPort,
+		localPort:  localPort,
 		remotePort: dst.Port,
 	}, nil
 }
@@ -763,7 +769,7 @@ func (*endpoint) Accept(*tcpip.FullAddress) (tcpip.Endpoint, *waiter.Queue, tcpi
 
 func (e *endpoint) registerWithStack(netProtos []tcpip.NetworkProtocolNumber, id stack.TransportEndpointID) (stack.TransportEndpointID, tcpip.NICID, tcpip.Error) {
 	bindToDevice := tcpip.NICID(e.ops.GetBindToDevice())
-	if e.localPort == 0 {
+	if false && e.localPort == 0 {
 		portRes := ports.Reservation{
 			Networks:     netProtos,
 			Transport:    ProtocolNumber,

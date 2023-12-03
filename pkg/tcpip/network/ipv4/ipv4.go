@@ -521,7 +521,11 @@ func (e *endpoint) handleFragments(_ *stack.Route, networkMTU uint32, pkt stack.
 
 // WritePacket writes a packet to the given destination address and protocol.
 func (e *endpoint) WritePacket(r *stack.Route, params stack.NetworkHeaderParams, pkt stack.PacketBufferPtr) tcpip.Error {
-	if err := e.addIPHeader(r.LocalAddress(), r.RemoteAddress(), pkt, params, nil /* options */); err != nil {
+	localAddr := r.LocalAddress()
+	if params.LocalAddress != nil {
+		localAddr = *params.LocalAddress
+	}
+	if err := e.addIPHeader(localAddr, r.RemoteAddress(), pkt, params, nil /* options */); err != nil {
 		return err
 	}
 
